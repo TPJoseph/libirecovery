@@ -1089,11 +1089,52 @@ typedef struct usb_control_request {
 	char data[];
 } usb_control_request;
 
-irecv_error_t mobiledevice_openpipes(irecv_client_t client);
-void mobiledevice_closepipes(irecv_client_t client);
-irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid);
+static irecv_error_t win32_openpipes(irecv_client_t client)
+{
+	if (client->iBootPath && !(client->hIB = CreateFileA(client->iBootPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL))) {
+		irecv_close(client);
+		return IRECV_E_UNABLE_TO_CONNECT;
+	}
 
-irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
+	if (client->DfuPath && !(client->hDFU = CreateFileA(client->DfuPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL))) {
+		irecv_close(client);
+		return IRECV_E_UNABLE_TO_CONNECT;
+	}
+
+	client->mode = 0;
+	if (client->iBootPath == NULL) {
+		if (strncmp(client->DfuPath, "\\\\?\\usb#vid_05ac&pid_", 21) == 0) {
+			sscanf(client->DfuPath+21, "%x#", &client->mode);
+		}
+		client->handle = client->hDFU;
+	} else {
+		if (strncmp(client->iBootPath, "\\\\?\\usb#vid_05ac&pid_", 21) == 0) {
+			sscanf(client->iBootPath+21, "%x#", &client->mode);
+		}
+		client->handle = client->hIB;
+	}
+
+	if (client->mode == 0) {
+		irecv_close(client);
+		return IRECV_E_UNABLE_TO_CONNECT;
+	}
+
+	return IRECV_E_SUCCESS;
+}
+
+static void win32_closepipes(irecv_client_t client)
+{
+	if (client->hDFU!=NULL) {
+		CloseHandle(client->hDFU);
+		client->hDFU = NULL;
+	}
+	if (client->hIB!=NULL) {
+		CloseHandle(client->hIB);
+		client->hIB = NULL;
+	}
+}
+
+static irecv_error_t win32_open_with_ecid(irecv_client_t* client, uint64_t ecid)
 {
 	int found = 0;
 	SP_DEVICE_INTERFACE_DATA currentInterface;
@@ -1124,8 +1165,8 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 			free(details);
 
 			_client->DfuPath = result;
-			if (mobiledevice_openpipes(_client) != IRECV_E_SUCCESS) {
-				mobiledevice_closepipes(_client);
+			if (win32_openpipes(_client) != IRECV_E_SUCCESS) {
+				win32_closepipes(_client);
 				continue;
 			}
 
@@ -1140,7 +1181,7 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 
 			if ((ecid != 0) && (_client->mode == IRECV_K_WTF_MODE)) {
 				/* we can't get ecid in WTF mode */
-				mobiledevice_closepipes(_client);
+				win32_closepipes(_client);
 				continue;
 			}
 
@@ -1155,7 +1196,7 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 			}
 
 			if (serial_str[0] == '\0') {
-				mobiledevice_closepipes(_client);
+				win32_closepipes(_client);
 				continue;
 			}
 
@@ -1177,7 +1218,7 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 
 			if (ecid != 0) {
 				if (_client->device_info.ecid != ecid) {
-					mobiledevice_closepipes(_client);
+					win32_closepipes(_client);
 					continue;
 				}
 				debug("found device with ECID %016" PRIx64 "\n", (uint64_t)ecid);
@@ -1215,14 +1256,14 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 			free(details);
 
 			_client->iBootPath = result;
-			if (mobiledevice_openpipes(_client) != IRECV_E_SUCCESS) {
-				mobiledevice_closepipes(_client);
+			if (win32_openpipes(_client) != IRECV_E_SUCCESS) {
+				win32_closepipes(_client);
 				continue;
 			}
 
 			if ((ecid != 0) && (_client->mode == IRECV_K_WTF_MODE)) {
 				/* we can't get ecid in WTF mode */
-				mobiledevice_closepipes(_client);
+				win32_closepipes(_client);
 				continue;
 			}
 
@@ -1237,7 +1278,7 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 			}
 
 			if (serial_str[0] == '\0') {
-				mobiledevice_closepipes(_client);
+				win32_closepipes(_client);
 				continue;
 			}
 
@@ -1259,7 +1300,7 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 
 			if (ecid != 0) {
 				if (_client->device_info.ecid != ecid) {
-					mobiledevice_closepipes(_client);
+					win32_closepipes(_client);
 					continue;
 				}
 				debug("found device with ECID %016" PRIx64 "\n", (uint64_t)ecid);
@@ -1278,51 +1319,6 @@ irecv_error_t mobiledevice_connect(irecv_client_t* client, uint64_t ecid)
 	*client = _client;
 
 	return IRECV_E_SUCCESS;
-}
-
-irecv_error_t mobiledevice_openpipes(irecv_client_t client)
-{
-	if (client->iBootPath && !(client->hIB = CreateFileA(client->iBootPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL))) {
-		irecv_close(client);
-		return IRECV_E_UNABLE_TO_CONNECT;
-	}
-
-	if (client->DfuPath && !(client->hDFU = CreateFileA(client->DfuPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL))) {
-		irecv_close(client);
-		return IRECV_E_UNABLE_TO_CONNECT;
-	}
-
-	client->mode = 0;
-	if (client->iBootPath == NULL) {
-		if (strncmp(client->DfuPath, "\\\\?\\usb#vid_05ac&pid_", 21) == 0) {
-			sscanf(client->DfuPath+21, "%x#", &client->mode);
-		}
-		client->handle = client->hDFU;
-	} else {
-		if (strncmp(client->iBootPath, "\\\\?\\usb#vid_05ac&pid_", 21) == 0) {
-			sscanf(client->iBootPath+21, "%x#", &client->mode);
-		}
-		client->handle = client->hIB;
-	}
-
-	if (client->mode == 0) {
-		irecv_close(client);
-		return IRECV_E_UNABLE_TO_CONNECT;
-	}
-
-	return IRECV_E_SUCCESS;
-}
-
-void mobiledevice_closepipes(irecv_client_t client)
-{
-	if (client->hDFU!=NULL) {
-		CloseHandle(client->hDFU);
-		client->hDFU = NULL;
-	}
-	if (client->hIB!=NULL) {
-		CloseHandle(client->hIB);
-		client->hIB = NULL;
-	}
 }
 #endif
 
@@ -1856,7 +1852,7 @@ irecv_error_t irecv_open_with_ecid(irecv_client_t* pclient, uint64_t ecid)
 	error = libusb_open_with_ecid(pclient, ecid);
 #endif
 #else
-	error = mobiledevice_connect(pclient, ecid);
+	error = win32_open_with_ecid(pclient, ecid);
 #endif
 	irecv_client_t client = *pclient;
 	if (error != IRECV_E_SUCCESS) {
@@ -2258,7 +2254,15 @@ static int _irecv_is_recovery_device(void *device)
 	kern_return_t kr;
 	IOUSBDeviceInterface **dev = device;
 	kr = (*dev)->GetDeviceVendor(dev, &vendor_id);
+	if (kr != kIOReturnSuccess) {
+		debug("%s: Failed to get vendor id\n", __func__);
+		return 0;
+	}
 	kr = (*dev)->GetDeviceProduct(dev, &product_id);
+	if (kr != kIOReturnSuccess) {
+		debug("%s: Failed to get product id\n", __func__);
+		return 0;
+	}
 #else
 	libusb_device *device_ = (libusb_device*)device;
 	struct libusb_device_descriptor devdesc;
@@ -2507,7 +2511,7 @@ static void iokit_device_added(void *refcon, io_iterator_t iterator)
 		kr = IOCreatePlugInInterfaceForService(device, kIOUSBDeviceUserClientTypeID, kIOCFPlugInInterfaceID, &plugInInterface, &score);
 		if ((kIOReturnSuccess != kr) || !plugInInterface) {
 			debug("%s: ERROR: Unable to create a plug-in (%08x)\n", __func__, kr);
-			kr = IOObjectRelease(device);
+			IOObjectRelease(device);
 			continue;
 		}
 		result = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID320), (LPVOID *)&dev);
@@ -2515,13 +2519,13 @@ static void iokit_device_added(void *refcon, io_iterator_t iterator)
 
 		if (result || !dev) {
 			debug("%s: ERROR: Couldn't create a device interface (%08x)\n", __func__, (int)result);
-			kr = IOObjectRelease(device);
+			IOObjectRelease(device);
 			continue;
 		}
 
 		if (!_irecv_is_recovery_device(dev)) {
 			(void) (*dev)->Release(dev);
-			kr = IOObjectRelease(device);
+			IOObjectRelease(device);
 			continue;
 		}
 
@@ -2530,7 +2534,7 @@ static void iokit_device_added(void *refcon, io_iterator_t iterator)
 		idev.dev = dev;
 		_irecv_handle_device_add(&idev);
 		(void) (*dev)->Release(dev);
-		kr = IOObjectRelease(device);
+		IOObjectRelease(device);
 	}
 }
 
@@ -2719,10 +2723,16 @@ static void *_irecv_event_handler(void* data)
 
 		io_iterator_t devAddedIter;
 		kr = IOServiceAddMatchingNotification(notifyPort, kIOFirstMatchNotification, matchingDict, iokit_device_added, NULL, &devAddedIter);
+		if (kr != kIOReturnSuccess) {
+			debug("%s: Failed to register device add notification callback\n", __func__);
+		}
 		iokit_device_added(NULL, devAddedIter);
 
 		io_iterator_t devRemovedIter;
 		kr = IOServiceAddMatchingNotification(notifyPort, kIOTerminatedNotification, matchingDict, iokit_device_removed, NULL, &devRemovedIter);
+		if (kr != kIOReturnSuccess) {
+			debug("%s: Failed to register device remove notification callback\n", __func__);
+		}
 		iokit_device_removed(NULL, devRemovedIter);
 
 		i++;
@@ -2973,7 +2983,7 @@ irecv_error_t irecv_close(irecv_client_t client)
 		client->iBootPath = NULL;
 		free(client->DfuPath);
 		client->DfuPath = NULL;
-		mobiledevice_closepipes(client);
+		win32_closepipes(client);
 #endif
 		free(client->device_info.srnm);
 		free(client->device_info.imei);
@@ -3135,13 +3145,13 @@ static irecv_error_t irecv_get_status(irecv_client_t client, unsigned int* statu
 }
 #endif
 
-irecv_error_t irecv_kis_send_buffer(irecv_client_t client, unsigned char* buffer, unsigned long length, int dfu_notify_finished)
+static irecv_error_t irecv_kis_send_buffer(irecv_client_t client, unsigned char* buffer, unsigned long length, int dfu_notify_finished)
 {
 	if (client->mode != IRECV_K_DFU_MODE) {
 		return IRECV_E_UNSUPPORTED;
 	}
 
-	size_t origLen = length;
+	unsigned long origLen = length;
 
 	KIS_upload_chunk *chunk = calloc(1, sizeof(KIS_upload_chunk));
 	uint64_t address = 0;
